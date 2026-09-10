@@ -1,0 +1,18 @@
+# Python environment
+r-yolo-env/
+.venv/
+
+# Heavy video and image files
+raw_video/
+images/
+temp_frames/
+review_images/
+
+# Model checkpoints and logs
+runs/
+*.pt
+
+# R environment artifacts
+.Rhistory
+.RData
+.Rproj.user/
