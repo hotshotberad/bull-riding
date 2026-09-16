@@ -14,26 +14,22 @@ if (dir_exists(review_dir)) {
 }
 dir_create(review_dir)
 
-# 2. Extract frames from the new video
-video_path      <- file.path(base_dir, "raw_video", "ride_raw.mp4")
-temp_frames_dir <- file.path(base_dir, "temp_frames")
+# 2. Sample frames from the trimmed extraction
+frames_dir <- file.path(base_dir, "images")
+# Sort files chronologically by filename/creation order
+extracted  <- sort(list.files(frames_dir, pattern = "\\.jpg$", full.names = TRUE))
 
-if (dir_exists(temp_frames_dir)) {
-    dir_delete(temp_frames_dir)
+if (length(extracted) == 0) {
+    stop("No extracted frames found in ", frames_dir, ". Did Script 1 run correctly?")
 }
-dir_create(temp_frames_dir)
 
-# Extract frames (e.g., 2 fps)
-extracted <- av::av_video_images(video = video_path, destdir = temp_frames_dir, format = "jpg", fps = 2)
+# Select up to 20 evenly spaced frames across the entire ride duration
+n_sample <- min(20, length(extracted))
+indices  <- round(seq(1, length(extracted), length.out = n_sample))
+sampled_imgs <- extracted[indices]
 
-# Pick N random frames to review
-set.seed(Sys.time())
-n_sample     <- min(20, length(extracted))
-sampled_imgs <- sample(extracted, n_sample)
-
-# Copy sampled frames to review directory and remove temp folder
+# Copy selected frames to review directory
 file_copy(sampled_imgs, review_dir, overwrite = TRUE)
-dir_delete(temp_frames_dir)
 
 # 2. Run model predictions on the sampled images
 # Point to your best checkpoint from training
@@ -63,3 +59,8 @@ for (r in results) {
     }
 }
 message("Inference complete. Frames ready for review in: ", review_dir)
+
+
+
+
+

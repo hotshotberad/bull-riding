@@ -7,10 +7,10 @@ library(av) # working with video and audio (will use to extract still image fram
 library(fs) # manage files and folders (create directories, delete files)
 
 # The video link we want to download and slice up.
-url <- "https://youtu.be/vILCvdcg8rk?si=J3_xvg84QtkGGvuy"
+#url <- "https://youtu.be/P9JyBBQ0SdQ?si=MUa_KWyBlCXzMfRP"
 
 # What time to stop the function from extracting images (e.g. buck off time)
-trim <- "0:15"
+#trim <- "0:15"
 
 # Define the extraction function
 ## Extract still images from video
@@ -25,10 +25,12 @@ extract_frames <- function(video_url,
     ## Specify where the downloaded video and extracted images should be saved.
     raw_video_dir <- file.path(output_dir, "raw_video")
     frames_dir    <- file.path(output_dir, "images")
-    ## Automatically create the folders if they don't already exist on your computer.
 
-    #fs::dir_create(raw_video_dir)
-    #fs::dir_create(frames_dir)
+    # Ensure images folder is completely clean for the new ride
+    if (fs::dir_exists(frames_dir)) {
+        fs::dir_delete(frames_dir)
+    }
+    fs::dir_create(frames_dir)
 
     ## Combine the folder path and file name into one full path for the video file.
     raw_video_path <- file.path(raw_video_dir, video_name)
@@ -80,10 +82,3 @@ extract_frames <- function(video_url,
     # Return the list of created image file paths quietly (without cluttering the console).
     return(invisible(extracted_files))
 }
-
-frames <- extract_frames(
-    video_url = url,
-    output_dir  = "/Users/bradley/Desktop/coding/projects/bull",
-    fps         = 2,
-    trim        = trim
-)
