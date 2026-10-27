@@ -2,20 +2,18 @@
 source("1_video_image_extraction.R")
 
 # 1. Prompt user for video inputs
-video_url <- "https://youtu.be/AmCSC0i1KC4?si=chFMPj1O1XUrnvrD"
-trim_time <- "0:16"
-
-if (trim_time == "") {
-    trim_time <- NULL
-}
+video_url  <- "https://youtu.be/nC86Z6CGBHg?si=e6SAEfVotmsA-LPO"
+start_time <- "0:05"  # Approximately when the chute gate opens
+end_time   <- "0:14"  # Approximately when cowboy hits ground
 
 # 2. Step 1: Download video and extract image frames
-message("\n--- Step 1: Ingesting Video ---")
+message("\n--- Step 1: Extracting Images from Video ---")
 extract_frames(
     video_url  = video_url,
     output_dir = getwd(),
     fps        = 2,
-    trim       = trim_time
+    start_time = if (nzchar(start_time)) start_time else NULL,
+    end_time   = if (nzchar(end_time)) end_time else NULL
 )
 message("\n--- Step 1 Complete! ---")
 
@@ -36,7 +34,7 @@ message("\n--- Step 3 Complete! ---")
 
 
 
-
+# Run after 3-5 videos or end of session.
 
 # 5. Step 4: Retrain model on newly approved labels
 message("\n--- Step 4: Retraining Model ---")

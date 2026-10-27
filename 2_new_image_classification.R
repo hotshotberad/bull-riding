@@ -1,87 +1,91 @@
 # Load required packages
-library(shiny) # builds interactive web apps
-library(bslib) # provides styling and visual themes for Shiny apps
-library(magick) # handles image processing
-library(fs) # manages file and directory operations
+library(shiny)   # builds interactive web apps
+library(bslib)   # provides styling and visual themes for Shiny apps
+library(magick)  # handles image processing
+library(fs)      # manages file operations
 
 # File path setup
-base_dir   <- "/Users/bradley/Desktop/coding/projects/bull"
-image_dir  <- file.path(base_dir, "review_images")
-## Folders where training images and labels will be stored.
-train_img  <- file.path(base_dir, "dataset", "images", "train")
-train_label  <- file.path(base_dir, "dataset", "labels", "train")
+base_dir    <- "/Users/bradley/Desktop/coding/projects/bull"
+image_dir   <- file.path(base_dir, "review_images")
+train_img   <- file.path(base_dir, "dataset", "images", "train")
+train_label <- file.path(base_dir, "dataset", "labels", "train")
 
 # Ensure destination folders exist on disk before the app begins
 dir_create(c(train_img, train_label))
 
-# User interface (UI)
-## Defines what the user sees and interacts with on the screen.
+# User Interface (UI)
 ui <- page_sidebar(
     theme = bs_theme(bootswatch = "flatly"),
     title = "R Bull Riding Image Review & Labeler",
-    ## Left-hand control panel
     sidebar = sidebar(
-        ## Dropdown to select what you are labeling (Cowboy vs. Bull)
         selectInput("class_select", "Active Class:",
                     choices = c("Cowboy (0)" = 0, "Bull (1)" = 1)),
         hr(),
-        ## Action buttons for approving, navigating, and resetting boxes
+        h5("Box-by-Box Review"),
+        div(class = "d-flex gap-1 mb-2",
+            actionButton("prev_box", "◀ Prev Box", class = "btn-secondary btn-sm flex-fill"),
+            actionButton("next_box", "Next Box ▶", class = "btn-secondary btn-sm flex-fill")
+        ),
+        actionButton("change_box_class", "Set Active Box to Selected Class", class = "btn-info w-100 mb-2"),
+        actionButton("delete_active_box", "✖ Delete Active Box", class = "btn-danger w-100 mb-2"),
+        actionButton("undo_box", "↩ Undo Last Drawn Box", class = "btn-outline-secondary w-100 mb-2"),
+        actionButton("clear_boxes", "Clear All Annotations", class = "btn-warning w-100 mb-2"),
+        hr(),
+        h5("Image Review"),
         actionButton("approve_img", "✔ Approve & Save to Train", class = "btn-success w-100 mb-2"),
         actionButton("prev_img", "◀ Previous Image", class = "btn-secondary w-100 mb-2"),
         actionButton("next_img", "Next Image ▶", class = "btn-primary w-100 mb-2"),
-        ## Undo button: Removes only the most recently drawn box
-        actionButton("undo_box", "↩ Undo Last Box", class = "btn-info w-100 mb-2"),
-        actionButton("clear_boxes", "Clear Annotations", class = "btn-warning w-100 mb-2"),
         hr(),
-        ## Text block showing current progress and image details
         verbatimTextOutput("status_text")
     ),
 
-    ## Main display area showing the current image and bounding boxes
     card(
-        card_header("Verify predictions, adjust boxes if needed, then click Approve"),
+        card_header("Click a box or use Prev/Next Box to inspect candidates. Draw by dragging. Click Approve when satisfied."),
         plotOutput("image_plot",
-                   ## Enables click-and-drag drawing directly on top of the image
+                   click = "plot_click",
                    brush = brushOpts(id = "plot_brush", resetOnNew = TRUE),
                    height = "600px")
     )
 )
 
-# Server logic
-## Handles backend operations (data storage, drawing, file operations)
+# Server Logic
 server <- function(input, output, session) {
-    ## Reactive variables: dynamic memory slots that update and refresh the UI automatically
-    image_files   <- reactiveVal(character(0)) ## Holds the list of image file paths waiting for review
-    current_idx   <- reactiveVal(1)            ## Tracks the index of the image currently being viewed
-    current_boxes <- reactiveVal(data.frame(   ## Stores active bounding box coordinates for the current image
+    image_files      <- reactiveVal(character(0))
+    current_idx      <- reactiveVal(1)
+    selected_box_idx <- reactiveVal(0)
+    current_boxes    <- reactiveVal(data.frame(
         class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()
     ))
 
-    ## Helper function: Scans the review folder to see what images remain
+    # Scan review folder to see what images remain
     refresh_files <- function() {
         files <- list.files(image_dir, pattern = "\\.(jpg|jpeg|png)$", full.names = TRUE, ignore.case = TRUE)
         image_files(files)
         if (length(files) == 0) {
             current_idx(0)
+            selected_box_idx(0)
         } else if (current_idx() > length(files)) {
             current_idx(length(files))
         }
     }
 
-    ## Perform the initial directory scan when the app launches
+    # Perform initial directory scan on launch
     observe({
         refresh_files()
     })
 
-    ## Helper function: Reads existing YOLO-format text labels and translates them into pixel boxes
-    ## (YOLO stores boxes as percentages of width/height centered at x, y; we convert them to exact pixel corners)
+    # Read YOLO text annotations into pixel coordinates
     load_annotations <- function(img_path, img_w, img_h) {
         txt_path <- sub("\\.[^.]+$", ".txt", img_path)
-        if (!file.exists(txt_path)) return(data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()))
+        if (!file.exists(txt_path)) {
+            return(data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()))
+        }
 
         lines <- readLines(txt_path, warn = FALSE)
         lines <- lines[nchar(trimws(lines)) > 0]
-        if (length(lines) == 0) return(data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()))
+        if (length(lines) == 0) {
+            return(data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()))
+        }
 
         parsed <- do.call(rbind, lapply(strsplit(lines, " "), as.numeric))
         cls <- parsed[, 1]
@@ -92,14 +96,14 @@ server <- function(input, output, session) {
 
         data.frame(
             class = as.integer(cls),
-            xmin = xc - (w / 2),
-            ymin = yc - (h / 2),
-            xmax = xc + (w / 2),
-            ymax = yc + (h / 2)
+            xmin  = xc - (w / 2),
+            ymin  = yc - (h / 2),
+            xmax  = xc + (w / 2),
+            ymax  = yc + (h / 2)
         )
     }
 
-    ## Helper function: Converts pixel coordinates back into normalized (0 to 1) YOLO text format and saves to disk
+    # Save pixel coordinates back into normalized YOLO text format
     save_annotations <- function(img_path, boxes, img_w, img_h) {
         txt_path <- sub("\\.[^.]+$", ".txt", img_path)
         if (nrow(boxes) == 0) {
@@ -116,7 +120,7 @@ server <- function(input, output, session) {
         writeLines(yolo_lines, txt_path)
     }
 
-    ## Whenever the active image changes, read its dimensions and load existing box labels
+    # Load annotations when active image index changes
     observe({
         files <- image_files()
         idx <- current_idx()
@@ -126,9 +130,76 @@ server <- function(input, output, session) {
         info <- image_info(image_read(img_path))
         loaded_boxes <- load_annotations(img_path, info$width, info$height)
         current_boxes(loaded_boxes)
+        selected_box_idx(if (nrow(loaded_boxes) > 0) 1 else 0)
     })
 
-    ## When the user clicks and drags a box on the image, add the new bounding box and auto-save it
+    # Select box by clicking directly inside it on the plot
+    observeEvent(input$plot_click, {
+        clk <- input$plot_click
+        boxes <- current_boxes()
+        if (nrow(boxes) == 0) return()
+
+        hits <- which(clk$x >= boxes$xmin & clk$x <= boxes$xmax &
+                          clk$y >= boxes$ymin & clk$y <= boxes$ymax)
+
+        if (length(hits) > 0) {
+            selected_box_idx(hits[length(hits)])
+        }
+    })
+
+    # Navigate forward through boxes
+    observeEvent(input$next_box, {
+        boxes <- current_boxes()
+        if (nrow(boxes) > 0) {
+            new_idx <- min(nrow(boxes), selected_box_idx() + 1)
+            selected_box_idx(new_idx)
+        }
+    })
+
+    # Navigate backward through boxes
+    observeEvent(input$prev_box, {
+        boxes <- current_boxes()
+        if (nrow(boxes) > 0) {
+            new_idx <- max(1, selected_box_idx() - 1)
+            selected_box_idx(new_idx)
+        }
+    })
+
+    # Reclassify the selected box to the class chosen in the dropdown
+    observeEvent(input$change_box_class, {
+        idx <- selected_box_idx()
+        boxes <- current_boxes()
+        req(nrow(boxes) > 0, idx >= 1, idx <= nrow(boxes))
+
+        boxes[idx, "class"] <- as.integer(input$class_select)
+        current_boxes(boxes)
+
+        img_path <- image_files()[current_idx()]
+        info <- image_info(image_read(img_path))
+        save_annotations(img_path, boxes, info$width, info$height)
+    })
+
+    # Delete only the currently active box
+    observeEvent(input$delete_active_box, {
+        idx <- selected_box_idx()
+        boxes <- current_boxes()
+        req(nrow(boxes) > 0, idx >= 1, idx <= nrow(boxes))
+
+        updated <- boxes[-idx, , drop = FALSE]
+        current_boxes(updated)
+
+        if (nrow(updated) == 0) {
+            selected_box_idx(0)
+        } else {
+            selected_box_idx(min(idx, nrow(updated)))
+        }
+
+        img_path <- image_files()[current_idx()]
+        info <- image_info(image_read(img_path))
+        save_annotations(img_path, updated, info$width, info$height)
+    })
+
+    # Add a new box by dragging with the mouse brush
     observeEvent(input$plot_brush, {
         brush <- input$plot_brush
         files <- image_files()
@@ -145,13 +216,47 @@ server <- function(input, output, session) {
 
         updated <- rbind(current_boxes(), new_box)
         current_boxes(updated)
+        selected_box_idx(nrow(updated))
 
         img_path <- files[idx]
         info <- image_info(image_read(img_path))
         save_annotations(img_path, updated, info$width, info$height)
     })
 
-    ## Approve button: Moves reviewed image and label files to the permanent training folder
+    # Undo the last drawn box
+    observeEvent(input$undo_box, {
+        files <- image_files()
+        idx <- current_idx()
+        req(length(files) > 0, idx > 0)
+
+        boxes <- current_boxes()
+        if (nrow(boxes) > 0) {
+            updated <- boxes[-nrow(boxes), , drop = FALSE]
+            current_boxes(updated)
+            selected_box_idx(if (nrow(updated) == 0) 0 else min(selected_box_idx(), nrow(updated)))
+
+            img_path <- files[idx]
+            info <- image_info(image_read(img_path))
+            save_annotations(img_path, updated, info$width, info$height)
+        }
+    })
+
+    # Clear all bounding boxes on the current image
+    observeEvent(input$clear_boxes, {
+        files <- image_files()
+        idx <- current_idx()
+        req(length(files) > 0, idx > 0)
+
+        empty_df <- data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric())
+        current_boxes(empty_df)
+        selected_box_idx(0)
+
+        img_path <- files[idx]
+        info <- image_info(image_read(img_path))
+        save_annotations(img_path, empty_df, info$width, info$height)
+    })
+
+    # Approve and move files into training dataset
     observeEvent(input$approve_img, {
         files <- image_files()
         idx <- current_idx()
@@ -160,74 +265,38 @@ server <- function(input, output, session) {
         img_path <- files[idx]
         txt_path <- sub("\\.[^.]+$", ".txt", img_path)
 
-        ## Move the image file to the training directory
         file_move(img_path, file.path(train_img, path_file(img_path)))
-
-        ## Move matching text label file if one exists
         if (file.exists(txt_path)) {
             file_move(txt_path, file.path(train_label, path_file(txt_path)))
         }
 
-        ## Refresh the remaining queue
         refresh_files()
     })
 
-    ## Navigation: Move forward one image
+    # Image navigation
     observeEvent(input$next_img, {
         if (current_idx() < length(image_files())) {
             current_idx(current_idx() + 1)
         }
     })
 
-    ## Navigation: Move back one image
     observeEvent(input$prev_img, {
         if (current_idx() > 1) {
             current_idx(current_idx() - 1)
         }
     })
 
-    ## Undo: Remove only the last bounding box drawn on the image
-    observeEvent(input$undo_box, {
-        files <- image_files()
-        idx <- current_idx()
-        req(length(files) > 0, idx > 0)
-
-        boxes <- current_boxes()
-        if (nrow(boxes) > 0) {
-            ## Drop the last row from the boxes table
-            updated <- boxes[-nrow(boxes), , drop = FALSE]
-            current_boxes(updated)
-
-            img_path <- files[idx]
-            info <- image_info(image_read(img_path))
-            save_annotations(img_path, updated, info$width, info$height)
-        }
-    })
-
-    ## Reset: Remove all bounding boxes on the current image
-    observeEvent(input$clear_boxes, {
-        files <- image_files()
-        idx <- current_idx()
-        req(length(files) > 0, idx > 0)
-        current_boxes(data.frame(class = integer(), xmin = numeric(), ymin = numeric(), xmax = numeric(), ymax = numeric()))
-        img_path <- files[idx]
-        info <- image_info(image_read(img_path))
-        save_annotations(img_path, current_boxes(), info$width, info$height)
-    })
-
-    ## Render the main interactive canvas (drawing the image and its labeled boxes)
+    # Render image canvas with highlighted active box
     output$image_plot <- renderPlot({
         files <- image_files()
         idx <- current_idx()
 
-        ## Display an empty placeholder if no images are left to review
         if (length(files) == 0 || idx == 0) {
             plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "")
             text(0, 0, "No more images to review!", cex = 1.5, col = "gray40")
             return()
         }
 
-        ## Load the image and configure a borderless canvas matching its dimensions
         img_path <- files[idx]
         img <- image_read(img_path)
         info <- image_info(img)
@@ -239,30 +308,48 @@ server <- function(input, output, session) {
         raster_img <- as.raster(img)
         rasterImage(raster_img, 0, info$height, info$width, 0)
 
-        ## Draw all existing bounding boxes and color-coded labels (Blue = Cowboy, Red = Bull)
         boxes <- current_boxes()
+        sel_idx <- selected_box_idx()
+
         if (nrow(boxes) > 0) {
             for (i in seq_len(nrow(boxes))) {
                 b <- boxes[i, ]
-                col <- ifelse(b$class == 0, "dodgerblue", "firebrick")
-                label <- ifelse(b$class == 0, "Cowboy", "Bull")
+                is_active <- (i == sel_idx)
 
-                ## Draw outer box border
-                rect(b$xmin, b$ymin, b$xmax, b$ymax, border = col, lwd = 3)
-                ## Draw label background tag
-                rect(b$xmin, b$ymin - 20, b$xmin + (nchar(label) * 12) + 10, b$ymin, col = col, border = NA)
-                ## Draw label text inside tag
-                text(b$xmin + 5, b$ymin - 7, labels = label, col = "white", font = 2, adj = c(0, 0.5), cex = 1.1)
+                class_name <- ifelse(b$class == 0, "Cowboy", "Bull")
+                default_col <- ifelse(b$class == 0, "dodgerblue", "firebrick")
+
+                # The active box is rendered with a prominent gold highlight
+                border_col <- if (is_active) "#FFD700" else default_col
+                border_lwd <- if (is_active) 5 else 2
+                border_lty <- if (is_active) "solid" else "dashed"
+
+                rect(b$xmin, b$ymin, b$xmax, b$ymax, border = border_col, lwd = border_lwd, lty = border_lty)
+
+                # Text label tag above box
+                tag_label <- paste0("#", i, " ", class_name)
+                tag_w <- (nchar(tag_label) * 11) + 12
+                rect(b$xmin, b$ymin - 22, b$xmin + tag_w, b$ymin, col = border_col, border = NA)
+                text(b$xmin + 5, b$ymin - 9, labels = tag_label,
+                     col = if (is_active) "black" else "white",
+                     font = 2, adj = c(0, 0.5), cex = 1.05)
             }
         }
     })
 
-    ## Render sidebar text showing how many images remain and active box counts
+    # Status panel displaying queue progress and active box information
     output$status_text <- renderText({
         files <- image_files()
         if (length(files) == 0) return("Queue empty: All images approved!")
-        sprintf("Review Queue: %d remaining\nFile: %s\nBoxes: %d",
-                length(files), basename(files[current_idx()]), nrow(current_boxes()))
+        boxes <- current_boxes()
+        total_boxes <- nrow(boxes)
+        cur_box <- selected_box_idx()
+
+        sprintf("Images Remaining: %d\nFile: %s\nTotal Boxes: %d\nActive Box: %s",
+                length(files),
+                basename(files[current_idx()]),
+                total_boxes,
+                if (total_boxes == 0) "None" else sprintf("%d of %d", cur_box, total_boxes))
     })
 }
 
